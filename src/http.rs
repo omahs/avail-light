@@ -8,23 +8,29 @@
 //! * `/v1/confidence/{block_number}` - returns calculated confidence for a given block number
 //! * `/v1/appdata/{block_number}` - returns decoded extrinsic data for configured app_id and given block number
 
-use std::{
-	net::SocketAddr,
-	str::FromStr,
-	sync::{Arc, Mutex},
-};
-
 use anyhow::{Context, Result};
 use avail_subxt::api::runtime_types::{da_control::pallet::Call, da_runtime::RuntimeCall};
 use avail_subxt::primitives::AppUncheckedExtrinsic;
 use base64::{engine::general_purpose, Engine as _};
 use codec::Decode;
+use futures::{FutureExt, StreamExt};
 use num::{BigUint, FromPrimitive};
 use rand::{thread_rng, Rng};
 use rocksdb::DB;
 use serde::{Deserialize, Serialize};
+use std::{
+	convert::Infallible,
+	net::SocketAddr,
+	str::FromStr,
+	sync::{Arc, Mutex},
+};
+use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::RwLock;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, info};
+use warp::ws::{Message, Ws};
 use warp::{http::StatusCode, Filter};
+use warp::{Rejection, Reply};
 
 use crate::{
 	data::{get_confidence_from_db, get_decoded_data_from_db},
@@ -244,7 +250,12 @@ struct AppDataQuery {
 }
 
 /// Runs HTTP server
-pub async fn run_server(store: Arc<DB>, cfg: RuntimeConfig, counter: Arc<Mutex<u32>>) {
+pub async fn run_server(
+	store: Arc<DB>,
+	cfg: RuntimeConfig,
+	counter: Arc<Mutex<u32>>,
+	clients: Clients,
+) {
 	let host = cfg.http_server_host.clone();
 	let port = if cfg.http_server_port.1 > 0 {
 		let port: u16 = thread_rng().gen_range(cfg.http_server_port.0..=cfg.http_server_port.1);
@@ -291,24 +302,54 @@ pub async fn run_server(store: Arc<DB>, cfg: RuntimeConfig, counter: Arc<Mutex<u
 		let counter_lock = counter_status.lock().unwrap();
 		status(&cfg, *counter_lock, db.clone())
 	});
+
 	let cors = warp::cors()
 		.allow_any_origin()
 		.allow_header("content-type")
 		.allow_methods(vec!["GET", "POST", "DELETE"]);
 
-	let route = warp::get().and(
-		get_mode
-			.or(get_latest_block)
-			.or(get_confidence)
-			.or(get_appdata)
-			.or(get_status),
-	);
+	let ws_route = warp::path!("v2" / "ws")
+		.and(warp::ws())
+		.and(with_clients(clients.clone()))
+		.and_then(ws_handler);
 
-	let routes = route.with(cors);
+	let routes = warp::get()
+		.and(
+			get_mode
+				.or(get_latest_block)
+				.or(get_confidence)
+				.or(get_appdata)
+				.or(get_status),
+		)
+		.or(ws_route)
+		.with(cors);
 
 	let addr = SocketAddr::from_str(format!("{host}:{port}").as_str())
 		.context("Unable to parse host address from config")
 		.unwrap();
 	info!("RPC running on http://{host}:{port}");
 	warp::serve(routes).run(addr).await;
+}
+
+fn with_clients(clients: Clients) -> impl Filter<Extract = (Clients,), Error = Infallible> + Clone {
+	warp::any().map(move || clients.clone())
+}
+
+pub type Clients = Arc<RwLock<Vec<UnboundedSender<Result<Message, warp::Error>>>>>;
+
+async fn ws_handler(ws: Ws, clients: Clients) -> Result<impl Reply, Rejection> {
+	Ok(ws.on_upgrade(move |web_socket| async move {
+		let (ws_sender, mut ws_receiver) = web_socket.split();
+		let (sender, reciever) = mpsc::unbounded_channel();
+		let reciever = UnboundedReceiverStream::new(reciever);
+		tokio::task::spawn(reciever.forward(ws_sender).map(|result| {
+			if let Err(_error) = result {
+				todo!("Handle error")
+			}
+		}));
+		clients.write().await.push(sender);
+		while let Some(_result) = ws_receiver.next().await {
+			todo!("Discard client message")
+		}
+	}))
 }

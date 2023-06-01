@@ -39,10 +39,11 @@ use rocksdb::DB;
 use sp_core::blake2_256;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, info};
+use warp::ws::Message;
 
 use crate::{
 	data::{store_block_header_in_db, store_confidence_in_db},
-	http::calculate_confidence,
+	http::{self, calculate_confidence},
 	network::Client,
 	proof, rpc,
 	telemetry::metrics::{MetricEvent, Metrics},
@@ -387,6 +388,7 @@ pub async fn run(
 	counter: Arc<Mutex<u32>>,
 	mut message_rx: Receiver<(Header, Instant)>,
 	error_sender: Sender<anyhow::Error>,
+	clients: http::Clients,
 ) {
 	info!("Starting light client...");
 
@@ -418,6 +420,12 @@ pub async fn run(
 		    error!("Cannot create message from header");
 		    continue;
 		};
+
+		for sender in clients.read().await.iter() {
+			let _ = sender.send(Ok(Message::text(
+				serde_json::to_string(&client_msg).unwrap(),
+			)));
+		}
 
 		// notify dht-based application client
 		// that newly mined block has been received

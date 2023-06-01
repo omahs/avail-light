@@ -16,7 +16,10 @@ use libp2p::{metrics::Metrics as LibP2PMetrics, multiaddr::Protocol, Multiaddr, 
 use prometheus_client::registry::Registry;
 use rand::{thread_rng, Rng};
 use rocksdb::{ColumnFamilyDescriptor, Options, DB};
-use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::{
+	mpsc::{channel, Sender},
+	RwLock,
+};
 use tracing::{error, info, metadata::ParseLevelError, trace, warn, Level};
 use tracing_subscriber::{
 	fmt::format::{self, DefaultFields, Format, Full, Json},
@@ -149,7 +152,14 @@ async fn run(error_sender: Sender<anyhow::Error>) -> Result<()> {
 
 	// Spawn tokio task which runs one http server for handling RPC
 	let counter = Arc::new(Mutex::new(0u32));
-	tokio::task::spawn(http::run_server(db.clone(), cfg.clone(), counter.clone()));
+	let clients: http::Clients = Arc::new(RwLock::new(Vec::new()));
+
+	tokio::task::spawn(http::run_server(
+		db.clone(),
+		cfg.clone(),
+		counter.clone(),
+		clients.clone(),
+	));
 
 	// If in fat client mode, enable deleting local Kademlia records
 	// This is a fat client memory optimization
@@ -302,6 +312,7 @@ async fn run(error_sender: Sender<anyhow::Error>) -> Result<()> {
 		counter,
 		message_rx,
 		error_sender,
+		clients,
 	));
 	Ok(())
 }
