@@ -274,7 +274,119 @@ Response:
 }
 ```
 
-## API reference
+## API reference : Version 2
+
+In case of error, endpoints will return response with `500 Internal Server Error` status code, and descriptive error message.
+
+[//]: # TODO: consider fields naming
+
+### **GET** `/v2`
+
+Gets metadata like light client version and version of a compatible network
+
+```json
+{
+	"version": "{version-string}",
+	"network_version: "{version-string}"
+}
+```
+
+### **GET** `/v2/status`
+
+Gets current status and basic configuration of the light client
+
+```json
+{
+	"modes": ["das", "app-data", "sync", "partition-publish"]
+	"app_id": "{app-id}",
+	"genesis_hash": "{genesis-hash}",
+	"latest_block": {latest-block},
+	"latest_synced_block": {sync-block},
+}
+```
+
+### **GET** `/v2/block/{block_number}` 
+
+
+block_number > latest_block
+
+```
+404 Not Found
+```
+
+block_number <= latest_block
+
+- pending: block will be processed at some point in the future (latest_block - block_number <= sync_depth)
+- sampling: block is randomly sampled to derive confidence
+- verifying: application data is fetched and verified 
+- ready: confidence is reached and data is available
+- unavailable: block will not be processed  (latest_block - block_number > sync_depth)
+- invalid: confidence is low
+
+```json
+{
+  "status": "pending|sampling|verifying|ready|unavailable|invalid"
+  "confidence": {confidence}
+}
+```
+
+### **GET** `/v2/block/{block_number}/header` 
+
+block_number > latest_block
+
+```
+404 Not Found
+```
+
+block_status = "pending|unavailable"
+
+```
+400 Bad Request
+```
+
+block_status != "pending|unavailable"
+
+```
+{
+	"hash": "{hash}",
+	"parentHash": "{parent_hash}",
+	"commitments": [{commitments}],
+	"dataRoot": "{data_root}",
+	"rows": {rows}, 
+	"cols": {cols},
+}
+```
+
+### **GET** `/v2/block/{block_number}/data`
+
+block_number > latest_block
+
+```
+404 Not Found
+```
+
+block_status != "ready"
+
+```
+400 Bad Request
+```
+
+block_status == "ready"
+
+Returns decoded blob with signature?
+if lc signs tx than signature is not needed
+
+### POST /v2/submit
+
+TODO
+
+### /v2/ws
+
+Web socket
+
+When block reaches `ready` or `invalid` state, message with header is pushed to clients.
+
+## API reference : Version 1
 
 In case of error, endpoints will return response with `500 Internal Server Error` status code, and descriptive error message.
 
