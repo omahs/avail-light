@@ -13,13 +13,14 @@ use libp2p::{
 	},
 	mdns::Event as MdnsEvent,
 	multiaddr::Protocol,
+	ping,
 	relay::{
 		inbound::stop::FatalUpgradeError as InboundStopFatalUpgradeError,
 		outbound::hop::FatalUpgradeError as OutboundHopFatalUpgradeError,
 	},
 	swarm::{
 		dial_opts::{DialOpts, PeerCondition},
-		ConnectionError, StreamUpgradeError, SwarmEvent,
+		ConnectionError, ConnectionHandlerUpgrErr, SwarmEvent,
 	},
 	Multiaddr, PeerId, Swarm,
 };
@@ -96,23 +97,23 @@ pub struct EventLoop {
 	bootstrap: BootstrapState,
 	kad_remove_local_record: bool,
 }
+type IoOrPing = Either<Either<std::io::Error, std::io::Error>, ping::Failure>;
 
-type IoError = Either<
-	Either<Either<Either<std::io::Error, std::io::Error>, void::Void>, void::Void>,
+type UpgradeOrPing = Either<Either<IoOrPing, void::Void>, ConnectionHandlerUpgrErr<std::io::Error>>;
+
+type StopOrHop = Either<
+	ConnectionHandlerUpgrErr<Either<InboundStopFatalUpgradeError, OutboundHopFatalUpgradeError>>,
 	void::Void,
 >;
 
-type StopOrHopError = Either<
-	StreamUpgradeError<Either<InboundStopFatalUpgradeError, OutboundHopFatalUpgradeError>>,
-	void::Void,
+type PingOrStopOrHop = Either<UpgradeOrPing, StopOrHop>;
+
+type Upgrade = Either<
+	ConnectionHandlerUpgrErr<Either<InboundUpgradeError, OutboundUpgradeError>>,
+	Either<ConnectionHandlerUpgrErr<std::io::Error>, void::Void>,
 >;
 
-type InOrOutError =
-	Either<StreamUpgradeError<Either<InboundUpgradeError, OutboundUpgradeError>>, void::Void>;
-
-type IoStopOrHopError = Either<IoError, StopOrHopError>;
-
-type StreamError = Either<IoStopOrHopError, InOrOutError>;
+type PingFailureOrUpgradeError = Either<PingOrStopOrHop, Upgrade>;
 
 impl EventLoop {
 	pub fn new(
@@ -155,7 +156,7 @@ impl EventLoop {
 		}
 	}
 
-	async fn handle_event(&mut self, event: SwarmEvent<BehaviourEvent, StreamError>) {
+	async fn handle_event(&mut self, event: SwarmEvent<BehaviourEvent, PingFailureOrUpgradeError>) {
 		match event {
 			SwarmEvent::Behaviour(BehaviourEvent::Kademlia(event)) => {
 				match event {
@@ -272,7 +273,7 @@ impl EventLoop {
 						// ones that contains the 'p2p' tag
 						listen_addrs
 							.into_iter()
-							.filter(|a| a.to_string().contains(Protocol::P2p(peer_id).tag()))
+							.filter(|a| a.to_string().contains(Protocol::P2p(peer_id.into()).tag()))
 							.for_each(|a| {
 								self.swarm
 									.behaviour_mut()
@@ -432,11 +433,8 @@ impl EventLoop {
 							}
 						}
 					},
-					SwarmEvent::Dialing {
-						peer_id: Some(peer),
-						connection_id,
-					} => {
-						debug!("Dialing: {}, on connection: {}", peer, connection_id);
+					SwarmEvent::Dialing(peer) => {
+						debug!("Dialing: {}.", peer);
 					},
 					_ => {},
 				}
@@ -573,8 +571,11 @@ impl EventLoop {
 				_ = response_sender.send(Ok(()));
 			},
 			Command::GetMultiaddress { response_sender } => {
-				let last_address = self.swarm.external_addresses().last();
-				_ = response_sender.send(last_address.cloned());
+				if let Some(last_address) = self.swarm.external_addresses().last() {
+					_ = response_sender.send(Some(last_address.addr.to_owned()));
+				} else {
+					_ = response_sender.send(None);
+				}
 			},
 		}
 	}
@@ -596,7 +597,7 @@ impl EventLoop {
 				self.relay
 					.address
 					.clone()
-					.with(Protocol::P2p(peer_id))
+					.with(Protocol::P2p(peer_id.into()))
 					.with(Protocol::P2pCircuit),
 			) {
 				Ok(_) => {
