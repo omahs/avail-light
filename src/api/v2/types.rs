@@ -253,6 +253,24 @@ pub struct Block {
 	pub confidence: Option<f64>,
 }
 
+impl Block {
+	fn new(status: BlockStatus, confidence: Option<f64>) -> Self {
+		Self { status, confidence }
+	}
+
+	pub fn unavailable() -> Self {
+		Self::new(BlockStatus::Unavailable, None)
+	}
+
+	pub fn pending() -> Self {
+		Self::new(BlockStatus::Pending, None)
+	}
+
+	pub fn finished(confidence: f64) -> Self {
+		Self::new(BlockStatus::Finished, Some(confidence))
+	}
+}
+
 impl Reply for Block {
 	fn into_response(self) -> warp::reply::Response {
 		warp::reply::json(&self).into_response()
