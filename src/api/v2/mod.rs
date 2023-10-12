@@ -68,7 +68,6 @@ fn block_route(
 		.and(warp::any().map(move || state.clone()))
 		.and(warp::any().map(move || db.clone()))
 		.then(handlers::block)
-		.map(types::handle_result)
 }
 
 fn submit_route(

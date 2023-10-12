@@ -567,6 +567,10 @@ impl BlockRange {
 		let first = last;
 		BlockRange { first, last }
 	}
+
+	pub fn contains(&self, block_number: u32) -> bool {
+		self.first <= block_number && block_number <= self.last
+	}
 }
 
 #[derive(Default)]
@@ -584,16 +588,17 @@ pub struct State {
 }
 
 pub trait OptionBlockRange {
-	fn set(&mut self, value: u32);
+	fn set(&mut self, block_number: u32);
 	fn first(&self) -> Option<u32>;
 	fn last(&self) -> Option<u32>;
+	fn contains(&self, block_number: u32) -> bool;
 }
 
 impl OptionBlockRange for Option<BlockRange> {
-	fn set(&mut self, value: u32) {
+	fn set(&mut self, block_number: u32) {
 		match self {
-			Some(range) => range.last = value,
-			None => *self = Some(BlockRange::init(value)),
+			Some(range) => range.last = block_number,
+			None => *self = Some(BlockRange::init(block_number)),
 		};
 	}
 
@@ -603,6 +608,12 @@ impl OptionBlockRange for Option<BlockRange> {
 
 	fn last(&self) -> Option<u32> {
 		self.as_ref().map(|range| range.last)
+	}
+
+	fn contains(&self, block_number: u32) -> bool {
+		self.as_ref()
+			.map(|range| range.contains(block_number))
+			.unwrap_or(false)
 	}
 }
 
